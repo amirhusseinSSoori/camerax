@@ -1,73 +1,58 @@
 package com.amirhusseinsoori.cameraxs.camera
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
-import androidx.appcompat.app.AppCompatActivity
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
-import android.util.DisplayMetrics
 import android.util.Log
+import android.view.KeyEvent
 import android.view.View
-import android.widget.Toast
-import androidx.camera.core.*
+import android.view.WindowManager
+import android.widget.ImageButton
+import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.LifecycleOwner
 import com.amirhusseinsoori.cameraxs.R
+import com.amirhusseinsoori.cameraxs.camera.VideoActivity.Companion.KEY_GRID
 import com.amirhusseinsoori.cameraxs.databinding.ActivityCameraBinding
-import com.amirhusseinsoori.cameraxs.databinding.ActivityMainBinding
 import com.amirhusseinsoori.cameraxs.util.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import im.vector.app.multipicker.camera.util.CameraConfiguration
+
 import java.io.File
+import java.nio.file.Files.createFile
 import java.text.SimpleDateFormat
-import java.util.*
-import java.util.concurrent.ExecutionException
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
+import java.util.Locale
 import kotlin.properties.Delegates
+import kotlin.random.Random
+
+
+private const val IMMERSIVE_FLAG_TIMEOUT = 500L
+
 
 class CameraActivity : AppCompatActivity() {
-    private val displayManager by lazy { getSystemService(Context.DISPLAY_SERVICE) as DisplayManager }
 
-    // An instance of a helper function to work with Shared Preferences
-    private val prefs by lazy { SharedPrefsManager.newInstance(applicationContext) }
-
-    private var preview: Preview? = null
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var imageCapture: ImageCapture? = null
-    private var imageAnalyzer: ImageAnalysis? = null
-
-    // A lazy instance of the current fragment's view binding
-
-
-    private var displayId = -1
-
-    // Selector showing which camera is selected (front or back)
-    private var lensFacing = CameraSelector.DEFAULT_BACK_CAMERA
-
-    // Selector showing which flash mode is selected (on, off or auto)
-    private var flashMode by Delegates.observable(ImageCapture.FLASH_MODE_OFF) { _, _, new ->
-        binding.btnFlash.setImageResource(
-            when (new) {
-                ImageCapture.FLASH_MODE_ON   -> R.drawable.ic_flash_on
-                ImageCapture.FLASH_MODE_AUTO -> R.drawable.ic_flash_auto
-                else                         -> R.drawable.ic_flash_off
-            }
-        )
-    }
+    lateinit var binding: ActivityCameraBinding
 
     // Selector showing is grid enabled or not
     private var hasGrid = false
+
+    private val displayManager by lazy { getSystemService(Context.DISPLAY_SERVICE) as DisplayManager }
 
     // Selector showing is hdr enabled or not (will work, only if device's camera supports hdr on hardware level)
     private var hasHdr = false
@@ -75,11 +60,71 @@ class CameraActivity : AppCompatActivity() {
     // Selector showing is there any selected timer and it's value (3s or 10s)
     private var selectedTimer = CameraTimer.OFF
 
-    /**
-     * A display listener for orientation changes that do not trigger a configuration
-     * change, for example if we choose to override config change in manifest or for 180-degree
-     * orientation changes.
-     */
+    private var preview: Preview? = null
+    private var imageCapture: ImageCapture? = null
+    private var lensFacing: Int = CameraSelector.LENS_FACING_BACK
+    private val prefs by lazy { SharedPrefsManager.newInstance(applicationContext) }
+    private val cameraProvider by lazy {
+        ProcessCameraProvider.getInstance(this)
+    }
+
+    // Selector showing which flash mode is selected (on, off or auto)
+    private var flashMode by Delegates.observable(ImageCapture.FLASH_MODE_OFF) { _, _, new ->
+        binding.btnFlash.setImageResource(
+            when (new) {
+                ImageCapture.FLASH_MODE_ON -> R.drawable.ic_flash_on
+                ImageCapture.FLASH_MODE_AUTO -> R.drawable.ic_flash_auto
+                else -> R.drawable.ic_flash_off
+            }
+        )
+    }
+
+    private fun initViews() {
+        binding.btnGrid.setImageResource(if (hasGrid) R.drawable.ic_grid_on else R.drawable.ic_grid_off)
+        binding.groupGridLines.visibility = if (hasGrid) View.VISIBLE else View.GONE
+        adjustInsets()
+    }
+
+    private fun adjustInsets() {
+        window?.fitSystemWindows()
+        binding.btnTakePicture.onWindowInsets { view, windowInsets ->
+            if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT)
+                view.bottomMargin =
+                    windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
+            else view.endMargin = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()).right
+        }
+        binding.btnTimer.onWindowInsets { view, windowInsets ->
+            view.topMargin = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()).top
+        }
+    }
+
+    private val executor by lazy {
+        ContextCompat.getMainExecutor(this)
+    }
+
+    private val metadata by lazy {
+        packageManager.getActivityInfo(componentName, PackageManager.GET_META_DATA).metaData
+    }
+
+    private val overlay by lazy {
+        getConfigurationValue(CameraConfiguration.VIEW_FINDER_OVERLAY) as Int?
+    }
+
+    private val permissions by lazy {
+        listOf(Manifest.permission.CAMERA)
+    }
+
+    private val permissionsRequestCode by lazy {
+        Random.nextInt(0, 10000)
+    }
+    private var displayId = -1
+
+    private fun getConfigurationValue(key: String): Any? = when {
+        intent.extras?.containsKey(key) == true -> intent.extras?.get(key)
+        metadata?.containsKey(key) == true -> metadata.get(key)
+        else -> null
+    }
+
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
         override fun onDisplayRemoved(displayId: Int) = Unit
@@ -93,45 +138,69 @@ class CameraActivity : AppCompatActivity() {
             }
         }
     }
-    lateinit var binding: ActivityCameraBinding
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding= ActivityCameraBinding.inflate(layoutInflater)
+        binding = ActivityCameraBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        flashMode = prefs.getInt(KEY_FLASH, ImageCapture.FLASH_MODE_OFF)
-        hasGrid = prefs.getBoolean(KEY_GRID, false)
-        hasHdr = prefs.getBoolean(KEY_HDR, false)
-        initViews()
-        startCamera()
-        displayManager.registerDisplayListener(displayListener, null)
 
-        binding.run {
-            viewFinder.addOnAttachStateChangeListener(object :
-                View.OnAttachStateChangeListener {
-                override fun onViewDetachedFromWindow(v: View) =
-                    displayManager.registerDisplayListener(displayListener, null)
+        binding.viewFinder.addOnAttachStateChangeListener(object :
+            View.OnAttachStateChangeListener {
+            override fun onViewDetachedFromWindow(v: View) =
+                displayManager.registerDisplayListener(displayListener, null)
 
-                override fun onViewAttachedToWindow(v: View) =
-                    displayManager.unregisterDisplayListener(displayListener)
-            })
-            btnTakePicture.setOnClickListener { takePicture() }
+            override fun onViewAttachedToWindow(v: View) =
+                displayManager.unregisterDisplayListener(displayListener)
+        })
 
-            btnSwitchCamera.setOnClickListener { toggleCamera() }
-            btnTimer.setOnClickListener { selectTimer() }
-            btnGrid.setOnClickListener { toggleGrid() }
-            btnFlash.setOnClickListener { selectFlash() }
-            btnCancelCamera.setOnClickListener { finish() }
-            btnTimerOff.setOnClickListener { closeTimerAndSelect(CameraTimer.OFF) }
-            btnTimer3.setOnClickListener { closeTimerAndSelect(CameraTimer.S3) }
-            btnTimer10.setOnClickListener { closeTimerAndSelect(CameraTimer.S10) }
-            btnFlashOff.setOnClickListener { closeFlashAndSelect(ImageCapture.FLASH_MODE_OFF) }
-            btnFlashOn.setOnClickListener { closeFlashAndSelect(ImageCapture.FLASH_MODE_ON) }
-            btnFlashAuto.setOnClickListener { closeFlashAndSelect(ImageCapture.FLASH_MODE_AUTO) }
-
+        // Try to provide a seamless rotation for devices that support it
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.attributes.rotationAnimation =
+                WindowManager.LayoutParams.ROTATION_ANIMATION_SEAMLESS
         }
+
+
+        binding.btnSwitchCamera.setOnClickListener { toggleCamera() }
+        binding.btnTimer.setOnClickListener { selectTimer() }
+        binding.btnGrid.setOnClickListener { toggleGrid() }
+        binding.btnFlash.setOnClickListener { selectFlash() }
+        binding.btnCancelCamera.setOnClickListener { finish() }
+        binding.btnTimerOff.setOnClickListener { closeTimerAndSelect(CameraTimer.OFF) }
+        binding.btnTimer3.setOnClickListener { closeTimerAndSelect(CameraTimer.S3) }
+        binding.btnTimer10.setOnClickListener { closeTimerAndSelect(CameraTimer.S10) }
+        binding.btnFlashOff.setOnClickListener { closeFlashAndSelect(ImageCapture.FLASH_MODE_OFF) }
+        binding.btnFlashOn.setOnClickListener { closeFlashAndSelect(ImageCapture.FLASH_MODE_ON) }
+        binding.btnFlashAuto.setOnClickListener { closeFlashAndSelect(ImageCapture.FLASH_MODE_AUTO) }
+        // Operate on the viewfinder's thread to make sure it's ready
+        binding.viewFinder.post { drawCameraControls() }
     }
 
+    private fun closeFlashAndSelect(@ImageCapture.FlashMode flash: Int) =
+        binding.llFlashOptions.circularClose(binding.btnFlash) {
+            flashMode = flash
+            binding.btnFlash.setImageResource(
+                when (flash) {
+                    ImageCapture.FLASH_MODE_ON -> R.drawable.ic_flash_on
+                    ImageCapture.FLASH_MODE_OFF -> R.drawable.ic_flash_off
+                    else -> R.drawable.ic_flash_auto
+                }
+            )
+            imageCapture?.flashMode = flashMode
+            prefs.putInt(KEY_FLASH, flashMode)
+        }
 
+    private fun selectTimer() = binding.llTimerOptions.circularReveal(binding.btnTimer)
+
+    /** Reads and applies all custom configuration provided by the user of this activity */
+    private fun applyUserConfiguration() {
+
+
+        // If the user requested a specific lens facing, select it
+        getConfigurationValue(CameraConfiguration.CAMERA_LENS_FACING)?.let {
+            lensFacing = it as Int
+        }
+
+    }
 
     private fun selectFlash() = binding.llFlashOptions.circularReveal(binding.btnFlash)
     private fun toggleGrid() {
@@ -146,228 +215,229 @@ class CameraActivity : AppCompatActivity() {
             binding.groupGridLines.visibility = if (flag) View.VISIBLE else View.GONE
         }
     }
-    @Suppress("NON_EXHAUSTIVE_WHEN")
-    private fun takePicture() = CoroutineScope(Dispatchers.Main).launch {
-        // Show a timer based on user selection
-        when (selectedTimer) {
-            CameraTimer.S3  -> for (i in 3 downTo 1) {
-                binding.tvCountDown.text = i.toString()
-                delay(1000)
-            }
-            CameraTimer.S10 -> for (i in 10 downTo 1) {
-                binding.tvCountDown.text = i.toString()
-                delay(1000)
-            }
-        }
-        binding.tvCountDown.text = ""
-        captureImage()
-    }
-    private fun captureImage() {
-        val localImageCapture = imageCapture ?: throw IllegalStateException("Camera initialization failed.")
-        // Create output file to hold the image
-        val photoFile = createFile(applicationContext)
-        // Setup image capture metadata
 
-        val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile)
-            .build()
-
-
-
-        localImageCapture.takePicture(
-            outputOptions, // the options needed for the final image
-            applicationContext.mainExecutor(), // the executor, on which the task will run
-            object : ImageCapture.OnImageSavedCallback { // the callback, about the result of capture process
-                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-
-                    setResult(Activity.RESULT_OK)
-                    finish()
-                }
-
-                override fun onError(exception: ImageCaptureException) {
-                    // This function is called if there is an errors during capture process
-                    val msg = "Photo capture failed: ${exception.message}"
-                    Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
-                    Log.e(TAG, msg)
-                    exception.printStackTrace()
-                }
-            }
-        )
-    }
-    private fun startCamera() {
-        // This is the CameraX PreviewView where the camera will be rendered
-        val viewFinder = binding.viewFinder
-
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-        cameraProviderFuture.addListener({
-            try {
-                cameraProvider = cameraProviderFuture.get()
-            } catch (e: InterruptedException) {
-                Toast.makeText(applicationContext, "Error starting camera", Toast.LENGTH_SHORT).show()
-                return@addListener
-            } catch (e: ExecutionException) {
-                Toast.makeText(applicationContext, "Error starting camera", Toast.LENGTH_SHORT).show()
-                return@addListener
-            }
-
-            // The display information
-            val metrics = DisplayMetrics().also { viewFinder.display.getRealMetrics(it) }
-            // The ratio for the output image and preview
-            val aspectRatio = aspectRatio(metrics.widthPixels, metrics.heightPixels)
-            // The display rotation
-            val rotation = viewFinder.display.rotation
-
-            val localCameraProvider = cameraProvider
-                ?: throw IllegalStateException("Camera initialization failed.")
-
-            // The Configuration of camera preview
-            preview = Preview.Builder()
-                .setTargetAspectRatio(aspectRatio) // set the camera aspect ratio
-                .setTargetRotation(rotation) // set the camera rotation
-                .build()
-
-            // The Configuration of image capture
-            imageCapture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY) // setting to have pictures with highest quality possible (may be slow)
-                .setFlashMode(flashMode) // set capture flash
-                .setTargetAspectRatio(aspectRatio) // set the capture aspect ratio
-                .setTargetRotation(rotation) // set the capture rotation
-                .build()
-
-            // The Configuration of image analyzing
-            imageAnalyzer = ImageAnalysis.Builder()
-                .setTargetAspectRatio(aspectRatio) // set the analyzer aspect ratio
-                .setTargetRotation(rotation) // set the analyzer rotation
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // in our analysis, we care about the latest image
-                .build()
-                .also { setLuminosityAnalyzer(it) }
-
-            // Unbind the use-cases before rebinding them
-            localCameraProvider.unbindAll()
-            // Bind all use cases to the camera with lifecycle
-            bindToLifecycle(localCameraProvider, viewFinder)
-        }, ContextCompat.getMainExecutor(applicationContext))
-    }
-
-    private fun aspectRatio(width: Int, height: Int): Int {
-        val previewRatio = max(width, height).toDouble() / min(width, height)
-        if (abs(previewRatio - RATIO_4_3_VALUE) <= abs(previewRatio - RATIO_16_9_VALUE)) {
-            return AspectRatio.RATIO_4_3
-        }
-        return AspectRatio.RATIO_16_9
-    }
-    private fun selectTimer() = binding.llTimerOptions.circularReveal(binding.btnTimer)
-
-    /**
-     * Create some initial states
-     * */
-    private fun initViews() {
-        binding.btnGrid.setImageResource(if (hasGrid) R.drawable.ic_grid_on else R.drawable.ic_grid_off)
-        binding.groupGridLines.visibility = if (hasGrid) View.VISIBLE else View.GONE
-        adjustInsets()
-    }
-
-    /**
-     * This methods adds all necessary margins to some views based on window insets and screen orientation
-     * */
-    private fun adjustInsets() {
-        window?.fitSystemWindows()
-        binding.btnTakePicture.onWindowInsets { view, windowInsets ->
-            if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT)
-                view.bottomMargin =
-                    windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
-            else view.endMargin = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()).right
-        }
-        binding.btnTimer.onWindowInsets { view, windowInsets ->
-            view.topMargin = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()).top
-        }
-    }
-    @SuppressLint("RestrictedApi")
-    fun toggleCamera() = binding.btnSwitchCamera.toggleButton(
-        flag = lensFacing == CameraSelector.DEFAULT_BACK_CAMERA,
-        rotationAngle = 180f,
-        firstIcon = R.drawable.ic_outline_camera_rear,
-        secondIcon = R.drawable.ic_outline_camera_front,
-    ) {
-        lensFacing = if (it) {
-            CameraSelector.DEFAULT_BACK_CAMERA
-        } else {
-            CameraSelector.DEFAULT_FRONT_CAMERA
-        }
-
-        startCamera()
-    }
-    /**
-     * This function is called from XML view via Data Binding to select a timer
-     *  possible values are OFF, S3 or S10
-     *  circularClose() function is an Extension function which is adding circular close
-     * */
     private fun closeTimerAndSelect(timer: CameraTimer) =
         binding.llTimerOptions.circularClose(binding.btnTimer) {
             selectedTimer = timer
             binding.btnTimer.setImageResource(
                 when (timer) {
-                    CameraTimer.S3  -> R.drawable.ic_timer_3
+                    CameraTimer.S3 -> R.drawable.ic_timer_3
                     CameraTimer.S10 -> R.drawable.ic_timer_10
                     CameraTimer.OFF -> R.drawable.ic_timer_off
                 }
             )
         }
-    private fun closeFlashAndSelect(@ImageCapture.FlashMode flash: Int) =
-        binding.llFlashOptions.circularClose(binding.btnFlash) {
-            flashMode = flash
-            binding.btnFlash.setImageResource(
-                when (flash) {
-                    ImageCapture.FLASH_MODE_ON  -> R.drawable.ic_flash_on
-                    ImageCapture.FLASH_MODE_OFF -> R.drawable.ic_flash_off
-                    else                        -> R.drawable.ic_flash_auto
+
+
+    /**
+     * Inflate camera controls and update the UI manually upon config changes to avoid removing
+     * and re-adding the view finder from the view hierarchy; this provides a seamless rotation
+     * transition on devices that support it.
+     *
+     * NOTE: The flag is supported starting in Android 8 but there still is a small flash on the
+     * screen for devices that run Android 9 or below.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        drawCameraControls()
+    }
+
+    /** Volume down button receiver used to trigger shutter */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        return when (keyCode) {
+            // When the volume down button is pressed, simulate a shutter button click
+            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                val shutter = findViewById<ImageButton>(R.id.btnTakePicture)
+                shutter.simulateClick()
+                true
+            }
+            else -> super.onKeyDown(keyCode, event)
+        }
+    }
+
+    /** Sets cancel result code and exits the activity */
+    private fun cancelAndFinish() {
+        setResult(Activity.RESULT_CANCELED)
+        finish()
+    }
+
+    /**
+     * Method used to re-draw the camera UI controls, called every time configuration changes.
+     */
+    private fun drawCameraControls() {
+
+
+        binding.btnTakePicture.setOnClickListener {
+
+            // Disable all camera controls
+            binding.btnTakePicture.isEnabled = false
+            binding.btnSwitchCamera.isEnabled = false
+
+            // Get a stable reference of the modifiable image capture use case
+            imageCapture?.let { imageCapture ->
+
+                // Create output file to hold the image
+                val photoFile = createFile(filesDir)
+
+                // Setup image capture metadata
+                val metadata = ImageCapture.Metadata().apply {
+                    // Mirror image when using the front camera
+                    isReversedHorizontal = lensFacing == CameraSelector.LENS_FACING_FRONT
                 }
-            )
-            imageCapture?.flashMode = flashMode
-            prefs.putInt(KEY_FLASH, flashMode)
+
+                // Create output options object which contains file + metadata
+                val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile)
+                    .setMetadata(metadata)
+                    .build()
+
+                // Setup image capture listener which is triggered after photo has been taken
+                imageCapture.takePicture(
+                    outputOptions, executor, object : ImageCapture.OnImageSavedCallback {
+
+                        override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                            val savedUri = output.savedUri ?: Uri.fromFile(photoFile)
+                            Log.d(TAG, "Image captured successfully: $savedUri")
+                            setResult(Activity.RESULT_OK, Intent().apply {
+                                putExtra(CameraConfiguration.IMAGE_URI, savedUri)
+                            })
+                            finish()
+                        }
+
+                        override fun onError(exc: ImageCaptureException) {
+                            Log.e(TAG, "Error capturing image", exc)
+                            cancelAndFinish()
+                        }
+                    })
+            }
         }
 
-    private fun setLuminosityAnalyzer(imageAnalysis: ImageAnalysis) {
-        // Use a worker thread for image analysis to prevent glitches
-        val analyzerThread = HandlerThread("LuminosityAnalysis").apply { start() }
-        imageAnalysis.setAnalyzer(
-            ThreadExecutor(Handler(analyzerThread.looper)),
-            LuminosityAnalyzer()
-        )
+        // Listener for button used to switch cameras
+        binding.btnSwitchCamera.setOnClickListener {
+
+            // Flip-flop the required lens facing
+            lensFacing = if (CameraSelector.LENS_FACING_FRONT == lensFacing) {
+                CameraSelector.LENS_FACING_BACK
+            } else {
+                CameraSelector.LENS_FACING_FRONT
+            }
+
+            // Re-bind all use cases
+            bindCameraUseCases()
+        }
+
+        // Apply user configuration every time controls are drawn
+        applyUserConfiguration()
     }
-    private fun bindToLifecycle(localCameraProvider: ProcessCameraProvider, viewFinder: PreviewView) {
-        try {
-            localCameraProvider.bindToLifecycle(
-                this, // current lifecycle owner
-                lensFacing, // either front or back facing
-                preview, // camera preview use case
-                imageCapture, // image capture use case
-                imageAnalyzer, // image analyzer use case
+
+    @SuppressLint("RestrictedApi")
+    fun toggleCamera() = binding.btnSwitchCamera.toggleButton(
+        flag = lensFacing == CameraSelector.LENS_FACING_BACK,
+        rotationAngle = 180f,
+        firstIcon = R.drawable.ic_outline_camera_rear,
+        secondIcon = R.drawable.ic_outline_camera_front,
+    ) {
+        lensFacing = if (it) {
+            CameraSelector.LENS_FACING_BACK
+        } else {
+            CameraSelector.LENS_FACING_FRONT
+        }
+
+        binding.viewFinder.post { drawCameraControls() }
+    }
+
+    /** Declare and bind preview, capture and analysis use cases */
+    private fun bindCameraUseCases() = binding.viewFinder.post {
+
+        cameraProvider.addListener(Runnable {
+            // Camera provider is now guaranteed to be available
+            val cameraProvider = cameraProvider.get()
+
+            // Set up the view finder use case to display camera preview
+            preview = Preview.Builder()
+                .setTargetRotation(binding.viewFinder.display.rotation)
+                .build()
+                .apply {
+                    setSurfaceProvider(binding.viewFinder.surfaceProvider)
+                }
+
+            // Set up the capture use case to allow users to take photos
+            imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .setTargetRotation(binding.viewFinder.display.rotation)
+                .build()
+
+            // Create a new camera selector each time, enforcing lens facing
+            val cameraSelector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+
+            // Apply declared configs to CameraX using the same lifecycle owner
+            cameraProvider.unbindAll()
+            val camera = cameraProvider.bindToLifecycle(
+                this as LifecycleOwner, cameraSelector, preview, imageCapture
             )
 
-            // Attach the viewfinder's surface provider to preview use case
-            preview?.setSurfaceProvider(viewFinder.surfaceProvider)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to bind use cases", e)
+            // TODO: Use camera controls to implement touch-to-focus once PreviewView metering
+            //  point factory is ready
+        }, executor)
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        // Request permissions each time the app resumes, since they can be revoked at any time
+        if (!hasPermissions(this)) {
+            ActivityCompat.requestPermissions(
+                this, permissions.toTypedArray(), permissionsRequestCode
+            )
+        } else {
+            drawCameraControls()
+            bindCameraUseCases()
         }
     }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == permissionsRequestCode && hasPermissions(this)) {
+            bindCameraUseCases()
+        } else {
+            // Indicate that the user cancelled the action and exit if no permissions are granted
+            cancelAndFinish()
+        }
+    }
+
+
+
+
+    /** Override back-navigation to add a cancelled result extra */
+    override fun onBackPressed() {
+        setResult(Activity.RESULT_CANCELED)
+        super.onBackPressed()
+    }
+
+    /** Convenience method used to check if all permissions required by this app are granted */
+    private fun hasPermissions(context: Context) = permissions.all {
+        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+    }
+
     companion object {
-        private const val TAG = "CameraXDemo"
+        private val TAG = CameraActivity::class.java.simpleName
 
+        private const val FILENAME = "yyyy-MM-dd-HH-mm-ss-SSS"
+        private const val PHOTO_EXTENSION = ".jpg"
         const val KEY_FLASH = "sPrefFlashCamera"
         const val KEY_GRID = "sPrefGridCamera"
         const val KEY_HDR = "sPrefHDR"
-        fun createFile(context: Context): File {
-            val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(
-                Date()
-            )
-            val storageDir: File = context.filesDir
-            return File.createTempFile(
-                "${timeStamp}_", /* prefix */
-                ".jpg", /* suffix */
-                storageDir /* directory */
-            )
-        }
-        private const val RATIO_4_3_VALUE = 4.0 / 3.0 // aspect ratio 4x3
-        private const val RATIO_16_9_VALUE = 16.0 / 9.0 // aspect ratio 16x9
+        /** Helper function used to create a timestamped file */
+        private fun createFile(
+            baseFolder: File,
+            format: String = FILENAME,
+            extension: String = PHOTO_EXTENSION
+        ) = File(baseFolder, SimpleDateFormat(format, Locale.US)
+            .format(System.currentTimeMillis()) + extension)
     }
+
+
 }
