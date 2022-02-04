@@ -3,6 +3,7 @@ package com.amirhusseinsoori.cameraxs.ui
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.Activity.RESULT_OK
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -38,6 +39,10 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.properties.Delegates
 import kotlin.random.Random
+import com.yalantis.ucrop.UCrop
+
+
+
 
 @AndroidEntryPoint
 class CameraFragment: Fragment(R.layout.fragment_camera) {
@@ -133,9 +138,6 @@ class CameraFragment: Fragment(R.layout.fragment_camera) {
     }
 
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-    }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         binding=FragmentCameraBinding.bind(view)
@@ -268,8 +270,14 @@ class CameraFragment: Fragment(R.layout.fragment_camera) {
                         override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                             val savedUri = output.savedUri ?: Uri.fromFile(photoFile)
                             Log.d(TAG, "Image captured successfully: $savedUri")
-                            requireActivity().  setResult(Activity.RESULT_OK, Intent())
-                            findNavController().popBackStack()
+
+                            var uCrop = UCrop.of(
+                                savedUri,
+                                Uri.fromFile(File(requireActivity().getCacheDir(), "croper${Date().time}"))
+                            )
+                            uCrop.start(requireActivity())
+
+//                            findNavController().popBackStack()
 
                         }
 
@@ -297,6 +305,16 @@ class CameraFragment: Fragment(R.layout.fragment_camera) {
 
         // Apply user configuration every time controls are drawn
         applyUserConfiguration()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if ( requestCode == UCrop.REQUEST_CROP) {
+            var   resultUri:Uri = UCrop.getOutput(data!!)!!;
+            findNavController().popBackStack()
+        } else if (resultCode == UCrop.RESULT_ERROR) {
+            var   cropError:Throwable = UCrop.getError(data!!)!!;
+        }
     }
 
     @SuppressLint("RestrictedApi")

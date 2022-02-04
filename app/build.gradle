@@ -75,6 +75,7 @@ dependencies {
     implementation "androidx.lifecycle:lifecycle-runtime-ktx:$lifecycle_version"
     def fragment_version = "1.4.1"
     implementation "androidx.fragment:fragment-ktx:$fragment_version"
+    implementation 'com.github.yalantis:ucrop:2.2.7'
 }
 
 kapt {
