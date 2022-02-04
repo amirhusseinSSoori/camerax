@@ -18,6 +18,10 @@
         <entry key="..\:/Users/pl/AndroidStudioProjects/cameraxs/app/src/main/res/layout/activity_main.xml" value="0.17831813576494426" />
         <entry key="..\:/Users/pl/AndroidStudioProjects/cameraxs/app/src/main/res/layout/activity_video.xml" value="0.2798913043478261" />
         <entry key="app/src/main/res/layout/activity_camera.xml" value="0.22871376811594202" />
+        <entry key="app/src/main/res/layout/activity_main.xml" value="0.1956521739130435" />
+        <entry key="app/src/main/res/layout/activity_video.xml" value="0.1956521739130435" />
+        <entry key="app/src/main/res/layout/fragment_camera.xml" value="0.1956521739130435" />
+        <entry key="app/src/main/res/layout/fragment_start.xml" value="0.1956521739130435" />
       </map>
     </option>
   </component>
