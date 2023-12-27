@@ -16,7 +16,6 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.animation.doOnCancel
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowInsetsCompat
 import com.amirhusseinsoori.cameraxs.R
 import com.amirhusseinsoori.cameraxs.databinding.ActivityVideoBinding

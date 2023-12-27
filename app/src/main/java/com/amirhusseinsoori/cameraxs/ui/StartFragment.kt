@@ -11,12 +11,9 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.navigation.fragment.findNavController
 import com.amirhusseinsoori.cameraxs.R
-import com.amirhusseinsoori.cameraxs.camera.CameraActivity
 import com.amirhusseinsoori.cameraxs.camera.VideoActivity
 import com.amirhusseinsoori.cameraxs.databinding.FragmentStartBinding
-import dagger.hilt.android.AndroidEntryPoint
 
-@AndroidEntryPoint
 class StartFragment : Fragment(R.layout.fragment_start) {
     lateinit var bind:FragmentStartBinding
     private val requestPermissionLauncherCamera =

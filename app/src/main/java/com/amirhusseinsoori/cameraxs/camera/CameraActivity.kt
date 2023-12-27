@@ -29,20 +29,18 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.LifecycleOwner
 import com.amirhusseinsoori.cameraxs.R
-import com.amirhusseinsoori.cameraxs.camera.VideoActivity.Companion.KEY_GRID
+
 import com.amirhusseinsoori.cameraxs.databinding.ActivityCameraBinding
 import com.amirhusseinsoori.cameraxs.util.*
 import im.vector.app.multipicker.camera.util.CameraConfiguration
 
 import java.io.File
-import java.nio.file.Files.createFile
 import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlin.properties.Delegates
 import kotlin.random.Random
 
 
-private const val IMMERSIVE_FLAG_TIMEOUT = 500L
 
 
 class CameraActivity : AppCompatActivity() {
@@ -53,9 +51,6 @@ class CameraActivity : AppCompatActivity() {
     private var hasGrid = false
 
     private val displayManager by lazy { getSystemService(Context.DISPLAY_SERVICE) as DisplayManager }
-
-    // Selector showing is hdr enabled or not (will work, only if device's camera supports hdr on hardware level)
-    private var hasHdr = false
 
     // Selector showing is there any selected timer and it's value (3s or 10s)
     private var selectedTimer = CameraTimer.OFF
